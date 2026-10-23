@@ -10,3 +10,8 @@ wheels/
 .venv
 
 data/
+# macOS
+.DS_Store
+
+# Training outputs
+outputs/*.pt

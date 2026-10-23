@@ -1,8 +1,13 @@
 import math
+import os
+import time
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset, Subset
 from torchvision import datasets, transforms
 
 class PatchEmbed(nn.Module):
@@ -83,15 +88,24 @@ if __name__ == "__main__":
     test_tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean, std)])
 
     # uses existing data/cifar-10-batches-py, no download
-    train_dl = DataLoader(datasets.CIFAR10("data", train=True, transform=train_tf), batch_size=128, shuffle=True)
-    test_dl = DataLoader(datasets.CIFAR10("data", train=False, transform=test_tf), batch_size=256)
+    # random subset of CIFAR-10 so a full run finishes in a few minutes
+    TRAIN_N, TEST_N = 10000, 2000
+    g = torch.Generator().manual_seed(0)
+    train_ds = datasets.CIFAR10("data", train=True, transform=train_tf)
+    test_ds = datasets.CIFAR10("data", train=False, transform=test_tf)
+    train_ds = Subset(train_ds, torch.randperm(len(train_ds), generator=g)[:TRAIN_N].tolist())
+    test_ds = Subset(test_ds, torch.randperm(len(test_ds), generator=g)[:TEST_N].tolist())
+    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True)
+    test_dl = DataLoader(test_ds, batch_size=256)
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    model = ViT().to(device)
-    EPOCHS = 50
+    model = ViT(dim=128, depth=4, heads=4).to(device)   # smaller model for the subset
+    EPOCHS = 10
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.05)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS)
 
+    start = time.time()
+    losses, accs = [], []
     for ep in range(EPOCHS):
         model.train()
         for x, y in train_dl:
@@ -104,4 +118,12 @@ if __name__ == "__main__":
         with torch.no_grad():
             for x, y in test_dl:
                 correct += (model(x.to(device)).argmax(1).cpu() == y).sum().item()
-        print(f"epoch {ep+1}  loss {loss.item():.3f}  test acc {correct / len(test_dl.dataset):.4f}")
+        losses.append(loss.item()); accs.append(correct / len(test_dl.dataset))
+        print(f"epoch {ep+1}  loss {loss.item():.3f}  test acc {correct / len(test_dl.dataset):.4f}  {time.time() - start:.0f}s")
+
+    os.makedirs("outputs", exist_ok=True)
+    fig, ax = plt.subplots(1, 2, figsize=(10, 3.5))
+    ax[0].plot(range(1, EPOCHS + 1), losses); ax[0].set(title="Train loss (last batch)", xlabel="epoch")
+    ax[1].plot(range(1, EPOCHS + 1), accs); ax[1].axhline(0.1, ls="--", c="gray", label="chance")
+    ax[1].set(title="Test accuracy", xlabel="epoch", ylim=(0, 1)); ax[1].legend()
+    fig.tight_layout(); fig.savefig("outputs/vit_training.png", dpi=130)
