@@ -120,23 +120,6 @@ Status: forward pass and greedy `generate` only, run on random inputs. It import
 
 ---
 
-## What to build next
-
-Do these in order. Each one reuses the last and ends with a graph or a number.
-
-1. **CLIP on real captions** (Flickr8k + a real tokenizer). Report image-to-text recall@1/5/10.
-2. **Augmentation ablation.** Train ViT and ResNet on CIFAR-10 with and without crop/flip/mixup. Plot accuracy per epoch.
-3. **Shared `train.py`.** Warmup + cosine LR, grad clipping, mixed precision, checkpoint resume. Plot LR vs loss.
-4. **ViT vs CNN.** Same CIFAR-10 split at 1k, 5k, 10k, 50k images. Plot accuracy vs data size.
-5. **Object detection.** Fine-tune a pretrained detector. Learn IoU, NMS, mAP. Show boxes on images.
-6. **Segmentation.** Small U-Net on Oxford-IIIT Pet. Report mean IoU. Show input / mask / prediction.
-7. **Self-supervised learning.** SimCLR or masked autoencoder, then a linear probe on frozen features.
-8. **Generative models.** VAE, then a small diffusion model. Show sample grids over training.
-9. **Train the multimodal LLM** on Flickr8k captions. Compare generated vs real captions.
-10. **Interpretability.** Grad-CAM for ResNet, attention maps for ViT, accuracy vs noise/blur.
-
----
-
 ## Repo layout
 
 ```

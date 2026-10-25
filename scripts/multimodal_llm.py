@@ -12,135 +12,123 @@ Three parts:
   3. Language model : decoder-only transformer with causal attention. It reads the
                       image tokens as a prefix, then predicts text one token at a time.
 """
+from sympy import N
+from regex import B
+from numpy import dtype
+from numpy import imag
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn as nn 
 
-from vit import PatchEmbedding, ViTBlock
+# Loading the Pretrained ViT Encoder
+
+from transformers import CLIPVisionModel , CLIPImageProcessor
+
+path = "models/clip-vit-base-patch32"
+vision = CLIPVisionModel.from_pretrained(path).eval()
+
+for p in vision.parameters():
+    p.requires_grad = False 
+
+processor = CLIPImageProcessor.from_pretrained(path)
+
+px = processor(images="/Users/shivraj/Developer/computer-vision/data/flowers-102/jpg/image_00001.jpg", return_tensors="pt").pixel_values
+feats = vision(pixel_values=px).last_hidden_state
+
+# print(feats.shape)
 
 
-# 1. Vision encoder ----------------------------------------------------------
-class VisionEncoder(nn.Module):
-    """ViT without the classification head. Returns one feature per patch."""
-    def __init__(self, img_size=224, patch_size=16, dim=768, depth=12, num_heads=12):
-        super().__init__()
-        self.patch_embed = PatchEmbedding(img_size, patch_size, 3, dim)
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches, dim))
-        self.blocks = nn.Sequential(*[ViTBlock(dim, num_heads) for _ in range(depth)])
-        self.norm = nn.LayerNorm(dim, eps=1e-6)
+# LLM Loading 
 
-    def forward(self, img: torch.Tensor) -> torch.Tensor:
-        x = self.patch_embed(img) + self.pos_embed   # [B, 196, vision_dim]
-        return self.norm(self.blocks(x))             # [B, 196, vision_dim]
+from transformers import AutoModelForCausalLM , AutoTokenizer
+
+path = "models/qwen2.5-0.5b-instruct"
+tok = AutoTokenizer.from_pretrained(path)
+
+llm = AutoModelForCausalLM.from_pretrained(path,dtype=torch.float32)
+
+for p in llm.parameters():
+    p.requires_grad = False
+
+d_llm = llm.config.hidden_size  # 896 , the projector output size 
+embed = llm.get_input_embeddings() # token ID -> vector_layer 
+
+# Writing the Projector Layer 
+from datasets import load_dataset
+
+ds = load_dataset("parquet", data_files={
+    "train": "data/flickr8k/data/train-*.parquet",
+    "validation": "data/flickr8k/data/validation-*.parquet",
+})
 
 
-# 2. Projector ---------------------------------------------------------------
+
+projector = nn.Sequential(
+    nn.Linear(768,896),
+    nn.GELU(),
+    nn.Linear(896,896)
+)
+
 class Projector(nn.Module):
-    """2-layer MLP: vision_dim -> llm_dim. This is the "bridge" between modalities."""
-    def __init__(self, vision_dim: int, llm_dim: int):
+    def __init__(self, d_vis=768,d_llm=896):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(vision_dim, llm_dim),
-            nn.GELU(),
-            nn.Linear(llm_dim, llm_dim),
-        )
+        self.net = nn.Sequential(nn.Linear(d_vis,d_llm) , nn.GELU() , nn.Linear(d_llm , d_llm))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)                           # [B, 196, llm_dim]
+    
+    def forward(self,x):   # [B,49,768] -> [B,49,896]
+        return self.net(x)
 
 
-# 3. Language model ----------------------------------------------------------
-class CausalSelfAttention(nn.Module):
-    """Same as ViT attention, but each token may only attend to earlier tokens."""
-    def __init__(self, dim: int, num_heads: int):
+class MultiModalLLM(nn.Module):
+    def __init__(self, clip_path, llm_path):
         super().__init__()
-        self.num_heads = num_heads
-        self.qkv = nn.Linear(dim, dim * 3)
-        self.proj = nn.Linear(dim, dim)
+        self.vision = CLIPVisionModel.from_pretrained(clip_path)
+        self.llm = AutoModelForCausalLM.from_pretrained(llm_path , dtype = torch.float32)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, N, C = x.shape
-        q, k, v = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # causal mask applied inside
-        return self.proj(out.transpose(1, 2).reshape(B, N, C))
+        for p in self.vision.parameters():
+            p.requires_grad = False
+        for p in self.llm.parameters():
+            p.requires_grad = False
+        
+        self.projector = Projector(self.vision.config.hidden_size , self.llm.config.hidden_size)
 
+    def encode_image(self, pixel_values):
+        with torch.no_grad():
+            feats = self.vision(pixel_values = pixel_values).last_hidden_state
+        return self.projector(feats[:,1:])  # # drop CLS -> [B,49,896]
 
-class DecoderBlock(nn.Module):
-    """Pre-norm block: causal attention + MLP (same layout as ViTBlock)."""
-    def __init__(self, dim: int, num_heads: int):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = CausalSelfAttention(dim, num_heads)
-        self.norm2 = nn.LayerNorm(dim)
-        self.mlp = nn.Sequential(nn.Linear(dim, dim * 4), nn.GELU(), nn.Linear(dim * 4, dim))
+    def forward(self, pixel_values , input_ids , attention_mask):
+        img = self.encode_image(pixel_values)                    # [B,N,D]
+        txt = self.llm.get_input_embeddings()(input_ids)         # [B,T,D]
+        x = torch.cat([img, txt], dim=1)                         # image is the prefix
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x))
-        return x + self.mlp(self.norm2(x))
+        B, N = img.shape[:2]
+        img_mask = torch.ones(B, N, dtype=attention_mask.dtype, device=attention_mask.device)
+        mask = torch.cat([img_mask, attention_mask], dim=1)      # [B,N+T]
 
+        img_labels = torch.full((B, N), -100, dtype=input_ids.dtype, device=input_ids.device)
+        txt_labels = input_ids.masked_fill(attention_mask == 0, -100)
+        labels = torch.cat([img_labels, txt_labels], dim=1)      # [B,N+T]
 
-class LanguageModel(nn.Module):
-    """Decoder-only transformer. Takes *embeddings* (not token ids) so image
-    tokens and text tokens can be fed through the same stack."""
-    def __init__(self, vocab_size: int, dim: int, depth: int, num_heads: int, max_len: int):
-        super().__init__()
-        self.tok_embed = nn.Embedding(vocab_size, dim)
-        self.pos_embed = nn.Parameter(torch.zeros(1, max_len, dim))
-        self.blocks = nn.Sequential(*[DecoderBlock(dim, num_heads) for _ in range(depth)])
-        self.norm = nn.LayerNorm(dim)
-        self.lm_head = nn.Linear(dim, vocab_size, bias=False)
+        return self.llm(inputs_embeds=x, attention_mask=mask, labels=labels)
 
-    def forward(self, embeds: torch.Tensor) -> torch.Tensor:
-        x = embeds + self.pos_embed[:, : embeds.size(1)]
-        return self.lm_head(self.norm(self.blocks(x)))   # [B, N, vocab]
-
-
-# Full model -----------------------------------------------------------------
-class MultimodalLLM(nn.Module):
-    def __init__(self, vocab_size=32000, vision_dim=768, llm_dim=512,
-                 vision_depth=12, llm_depth=8, num_heads=8, max_len=512):
-        super().__init__()
-        self.vision = VisionEncoder(dim=vision_dim, depth=vision_depth)
-        self.projector = Projector(vision_dim, llm_dim)
-        self.llm = LanguageModel(vocab_size, llm_dim, llm_depth, num_heads, max_len)
-
-    def embed_image(self, img: torch.Tensor) -> torch.Tensor:
-        return self.projector(self.vision(img))          # [B, 196, llm_dim]
-
-    def forward(self, img: torch.Tensor, input_ids: torch.Tensor, labels: torch.Tensor | None = None):
-        img_tokens = self.embed_image(img)               # [B, P, D]   P = 196 patches
-        txt_tokens = self.llm.tok_embed(input_ids)       # [B, T, D]
-        seq = torch.cat([img_tokens, txt_tokens], dim=1) # [B, P+T, D] image first, then text
-        logits = self.llm(seq)                           # [B, P+T, vocab]
-
-        if labels is None:
-            return logits
-
-        # Next-token loss on text only: the image prefix has no target.
-        # Logits at position i predict token i+1, so the text logits start at P-1.
-        P = img_tokens.size(1)
-        pred = logits[:, P - 1 : -1]                     # [B, T, vocab]
-        loss = F.cross_entropy(pred.reshape(-1, pred.size(-1)), labels.reshape(-1), ignore_index=-100)
-        return logits, loss
 
     @torch.no_grad()
-    def generate(self, img: torch.Tensor, input_ids: torch.Tensor, max_new_tokens: int = 20) -> torch.Tensor:
-        """Greedy decoding. Image is encoded once; text grows one token per step."""
-        img_tokens = self.embed_image(img)
-        for _ in range(max_new_tokens):
-            seq = torch.cat([img_tokens, self.llm.tok_embed(input_ids)], dim=1)
-            next_id = self.llm(seq)[:, -1].argmax(-1, keepdim=True)
-            input_ids = torch.cat([input_ids, next_id], dim=1)
-        return input_ids
+    def generate(self, pixel_values , max_new_tokens = 30):
+        img = self.encode_image(pixel_values=pixel_values)
+        mask = torch.ones(img.shape[:2] , dtype=torch.long , device=img.device)
+        return self.llm.generate(
+            input_embeds = img,
+            attention_mask=mask , 
+            max_new_tokens=max_new_tokens,
+            pad_token_id = self.llm.config.eos_token_id
+        )
 
 
-if __name__ == "__main__":
-    model = MultimodalLLM()
-    img = torch.randn(2, 3, 224, 224)
-    ids = torch.randint(0, 32000, (2, 16))               # e.g. tokenized "Describe this image."
+model = MultiModalLLM("models/clip-vit-base-patch32", "models/qwen2.5-0.5b-instruct").to("mps") 
+tok = AutoTokenizer.from_pretrained("models/qwen2.5-0.5b-instruct")   # add the AutoTokenizer import
 
-    logits, loss = model(img, ids, labels=ids)
-    print(f"Logits shape : {logits.shape}")              # [2, 196+16, 32000]
-    print(f"Loss         : {loss.item():.3f}")           # ~ln(32000) = 10.4 at init
-    print(f"Generated    : {model.generate(img, ids, 5).shape}")  # [2, 21]
-    print(f"Parameters   : {sum(p.numel() for p in model.parameters()):,}")
+t = tok(["a dog runs on grass" + tok.eos_token], return_tensors="pt").to("mps")
+px = torch.randn(1, 3, 224, 224, device="mps")
+out = model(px, t.input_ids, t.attention_mask)
+print(out.logits.shape, out.loss)    # expect [1, 49+T, vocab], loss around 10+
+print(sum(p.numel() for p in model.parameters() if p.requires_grad))   # ~1.4M

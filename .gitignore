@@ -15,3 +15,6 @@ data/
 
 # Training outputs
 outputs/*.pt
+
+models/
+plan.md

@@ -190,3 +190,7 @@ if __name__ == "__main__":
         cm[t, p] += 1
     plot_results(hist, sim_before, sim_matrix(), labels, cm.numpy(), class_names, test_acc)
     print("plots saved to outputs/clip_*.png")
+
+
+
+
