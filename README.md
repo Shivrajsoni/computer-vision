@@ -13,7 +13,7 @@ My notes and code for learning deep learning in computer vision. Every project i
 | 2 | ResNet internals | [`notebooks/resnet.ipynb`](notebooks/resnet.ipynb) | Blocks built by hand, Conv+BN fusion for faster inference |
 | 3 | Transfer learning | [`scripts/cnn.py`](scripts/cnn.py) | Pretrained ResNet-18 fine-tuned on Flowers-102, strong diagonal confusion matrix |
 | 4 | CLIP from scratch | [`scripts/clip.py`](scripts/clip.py) | 100% zero-shot on the one batch it memorized, 34% on unseen images |
-| 5 | Multimodal LLM | [`scripts/multimodal_llm.py`](scripts/multimodal_llm.py) | Architecture only, not trained yet |
+| 5 | Multimodal LLM | [`scripts/multimodal_llm.py`](scripts/multimodal_llm.py) | Flickr8k captioner, only a 1.5M projector trained: val loss 2.68 (ppl 14.5), captions get the gist but hallucinate details |
 
 ---
 
@@ -108,15 +108,80 @@ Unseen test images: better than chance, but many mistakes.
 
 ## 5. Multimodal LLM (`multimodal_llm.py`)
 
-**Idea:** turn image patches into "words" a language model can read, then let it write text.
+**Idea:** turn image patches into "words" a language model can read, then let it write text. This is the LLaVA recipe, stage 1 (alignment): train only the bridge between a frozen vision model and a frozen LLM.
 
 ```
-image ─► ViT ─► MLP projector ─► image tokens ─┐
-                                               ├─► causal transformer ─► next word
-text  ─► tokens ─► embedding ──────────────────┘
+image ─► CLIP ViT (frozen) ─► MLP projector (trained) ─► 49 image tokens ─┐
+                                                                          ├─► Qwen2.5-0.5B (frozen) ─► next word
+caption ─► tokenizer ─► embedding table ──────────────────────────────────┘
 ```
 
-Status: forward pass and greedy `generate` only, run on random inputs. It imports `PatchEmbedding` and `ViTBlock` from `vit.py`, but `vit.py` names them `PatchEmbed` and `Block`. Fix one side before running.
+**Why a projector?** CLIP's features (768-d) live in CLIP's space. Qwen reads vectors in its own 896-d embedding space, and the axes of the two are unrelated. The projector learns the map from one to the other. Its outputs are "soft tokens": they do not match real words, they are whatever makes the caption loss go down.
+
+**What one training example looks like** (image + the caption "a dog runs on grass"):
+
+```
+input   : [I1 ... I49]  a    dog   runs  on    grass  EOS      (49 image vectors + 6 text vectors)
+predict :  ...    I49   a    dog   runs  on    grass  EOS
+                   │    │     │     │    │      │      │
+target  :          a   dog  runs   on  grass   EOS     -
+```
+
+- Each position predicts the **next** token. Loss = cross-entropy against the true token **IDs** (not embeddings).
+- Image positions and padding are masked with -100, so only caption tokens count.
+- Teacher forcing: training feeds the true previous words, so all predictions come from one forward pass. `generate` feeds back its own words one at a time.
+- Gradients flow back through frozen Qwen into the projector, the only thing that updates.
+- Each image has 5 captions; every step picks one at random. The model learns what they share ("dog", "grass", "running"), and this is also why the loss cannot reach 0.
+
+**How I built it**
+- Frozen CLIP ViT-B/32 (49 patch tokens, CLS dropped) and frozen Qwen2.5-0.5B-Instruct. Only the 2-layer MLP projector (768 -> 896 -> 896, **1.49M params**) is trained.
+- Vision is frozen, so CLIP features are computed once and cached to disk. Training reads the cache.
+- Flickr8k: 6000 train / 1000 val / 1000 test images, 5 captions each.
+- AdamW, lr 1e-3, 100 warmup steps then cosine decay, grad clip 1.0, batch 32, 3 epochs (561 steps). About 15 min on a Colab T4.
+- Generation: beam search (3 beams) with repetition penalty 1.2.
+- Evaluation: val loss, a shuffled-image and a zero-image ablation, test BLEU-4 (own implementation in the script), and a grid of sample captions.
+
+**Run it**
+- Colab (recommended, T4): upload [`notebooks/multimodal_llm_colab.ipynb`](notebooks/multimodal_llm_colab.ipynb), set the runtime to T4 GPU, run all. It downloads the models and data and saves plots and `projector.pt`.
+- Local: `uv run python scripts/multimodal_llm.py --overfit` (sanity check, loss should fall toward 0), then `uv run python scripts/multimodal_llm.py`. On a Mac with MPS this is much slower than a T4.
+
+### Results
+
+Training log from the Colab run:
+
+![MLLM training log](outputs/mllm_training_log.png)
+
+| Check | Value | Meaning |
+| --- | --- | --- |
+| Val loss, correct image | **2.675** (perplexity 14.5) | on average the model is about as unsure as picking among 14 words per step |
+| Val loss, shuffled images | 3.175 | images swapped between captions: worse, so the image is used |
+| Val loss, zero image | above 6 (log cut off at 6.5) | no image: far worse |
+| Test BLEU-4 | not recorded | cut off in the log; rerun to get it |
+| Speed | ~1.6 s/step on T4 | 561 steps in about 15 min |
+
+![MLLM loss](outputs/mllm_loss.png)
+
+How to read the three plots (loss, learning rate, grad norm):
+- **Loss:** drops from about 8 to 3 in the first 100 steps (the model learns the caption style and uses the image), then creeps from 3.2 to 2.68. Train and val track each other, so there is **no overfitting**. The model is limited by capacity, since only the projector learns.
+- **Learning rate:** linear warmup to 1e-3 over 100 steps, then cosine decay to 0.
+- **Grad norm (before clipping):** huge at the start (up to 450) while the projector is random, then settles near 1. Warmup and clipping kept training stable.
+
+Sample captions on validation images (PRED is the model, GT is one human caption):
+
+![MLLM samples](outputs/mllm_samples.png)
+
+- **Gets the gist:** "Two dogs are playing in the grass", "A group of young girls are playing on a grassy field".
+- **Misses details and actions:** a toddler skateboarding in a blue helmet is "a boy in a red shirt running down the street"; a baseball slide is a football kick; ice skaters are "walking along a street"; a boy in a bubble bath is "playing with a toy". Colors and counts are often wrong.
+- **Generic wording:** many captions start "A group of people are...". This is typical when only the projector is trained and the LLM stays frozen.
+
+**What this tells me:** the pipeline works (the image really is used, shown by the ablations), but a frozen LLM that must read soft tokens it never saw gives coarse captions. The 0.5-nat gap between correct and shuffled images shows much of the loss is still the language prior.
+
+**Next steps (stage 2)**
+1. LoRA on Qwen's attention layers so the LLM itself adapts to image tokens.
+2. Instruction data in Qwen's chat format (`user: [image] question -> assistant: answer`), with the prompt masked out of the loss.
+3. Compute logits only on answer positions (saves memory and time).
+4. Try CLIP's penultimate-layer features, as LLaVA does, instead of the last layer.
+5. Check object hallucination with yes/no questions ("Is there a dog?").
 
 ---
 
@@ -124,7 +189,7 @@ Status: forward pass and greedy `generate` only, run on random inputs. It import
 
 ```
 scripts/     vit.py  cnn.py  clip.py  multimodal_llm.py
-notebooks/   resnet.ipynb
+notebooks/   resnet.ipynb  multimodal_llm_colab.ipynb
 outputs/     plots (committed) and checkpoints (git-ignored)
 data/        datasets (git-ignored)
 ```
