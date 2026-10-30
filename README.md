@@ -13,7 +13,7 @@ Start with the table below and click through to any project.
 | 3 | Transfer learning | [`cnn.py`](scripts/cnn.py) | Pretrained ResNet-18 fine-tuned on Flowers-102, near-diagonal confusion matrix | [docs/03](docs/03-transfer-learning.md) |
 | 4 | CLIP from scratch | [`clip.py`](scripts/clip.py) | 100% zero-shot on the batch it memorized, 34% on unseen images | [docs/04](docs/04-clip.md) |
 | 5 | Multimodal LLM | [`multimodal_llm.py`](scripts/multimodal_llm.py) | Flickr8k captioner with only a 1.5M projector trained: val loss 2.68 (ppl 14.5) | [docs/05](docs/05-multimodal-llm.md) |
-| 6 | U-Net segmentation | [`unet_segmentation.ipynb`](notebooks/unet_segmentation.ipynb) | Pets vs background, pretrained ResNet-34 encoder: val IoU 0.911 (0.915 with flip TTA) | [docs/06](docs/06-unet-segmentation.md) |
+| 6 | U-Net segmentation | [`unet_segmentation.ipynb`](notebooks/unet_segmentation.ipynb) | Pets vs background, pretrained ResNet-34 encoder: val IoU 0.911 (0.915 with flip TTA), plus inference on any photo with downloaded weights | [docs/06](docs/06-unet-segmentation.md) |
 
 ## A quick look
 
@@ -51,6 +51,7 @@ notebooks/   resnet.ipynb  multimodal_llm_colab.ipynb  unet_segmentation.ipynb
 docs/        one page per project, plus TEMPLATE.md for new ones
 outputs/     plots (committed) and checkpoints (git-ignored)
 data/        datasets (git-ignored)
+models/      downloaded pretrained weights (git-ignored)
 ```
 
 ## Adding a project

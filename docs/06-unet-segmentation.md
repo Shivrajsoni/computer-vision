@@ -67,6 +67,8 @@ Training setup for the current run:
 
 After training I measured inference speed (batch size, fp16, `channels_last`) and two free accuracy tricks: flip test-time augmentation and a threshold sweep.
 
+4. **Inference with downloaded weights (section 11).** My Colab weights were never saved to disk, so I downloaded a trained U-Net from the Hugging Face Hub instead: [`Zahro22/oxford-pet-segmentation`](https://huggingface.co/Zahro22/oxford-pet-segmentation). It has the same architecture as run 2 (`smp.Unet`, ResNet-34 encoder, 1 class), was trained on the same dataset, and reports test IoU 0.919. I load it two ways: with `smp.from_pretrained`, and by hand with `smp.Unet(...)` + `load_state_dict` on the `.safetensors` file. Both give the same output. Then a `segment(path)` function takes any photo and returns a probability map and a mask at the photo's original size.
+
 ## Run it
 
 Colab with a T4 GPU is the easiest. Upload the notebook, pick the GPU runtime and run all. The first cell installs `segmentation-models-pytorch` and `albumentations`.
@@ -78,6 +80,8 @@ uv run --with jupyter --with segmentation-models-pytorch jupyter lab notebooks/u
 ```
 
 The dataset (~800 MB) downloads to `data/` on the first run.
+
+To only run inference, skip to section 11. It needs no training and runs on a Mac in about 20 seconds. The weights (98 MB) download to `models/unet-resnet34-oxford-pet/`. To segment your own photo, set `IMAGE = "path/to/photo.jpg"` in the "Try it" cell.
 
 ## Results
 
@@ -129,12 +133,38 @@ Speed on a T4 at 256px:
 
 fp16 is free accuracy-wise and doubles speed on the T4's tensor cores. `channels_last` adds another ~19% on top. Batch 1 is what a phone app cares about (latency). Batch 64 is what a server chewing through a folder cares about (throughput). On my Mac (first run) fp16 only helped at batch 1, so these numbers depend a lot on the device.
 
+### Inference with downloaded weights
+
+The model card does not say how images were normalized during training, so I tested four options on 100 labelled test images:
+
+| Preprocessing | IoU |
+| --- | --- |
+| `(x/255 - mean) / std`, the ImageNet normalization I trained with | 0.000 |
+| `x/255` | 0.000 |
+| `x`, raw 0..255 | 0.886 |
+| `(x - mean) / std` on 0..255, as in the smp tutorial | **0.911** |
+
+The "correct" ImageNet normalization gives zero: the model calls every pixel background. These weights were trained with mean and std subtracted from 0..255 pixels, and inference has to copy that. Nothing crashes when the preprocessing is wrong. You only get bad masks.
+
+One photo, end to end (input, probability, mask, overlay, cut-out with a transparent background):
+
+![U-Net inference on one photo](../outputs/unet_inference.png)
+
+![U-Net inference on six test photos](../outputs/unet_inference_grid.png)
+
+- The masks spread a few pixels past the fur, so the cut-out keeps a thin halo of background. That comes from the labels: the trimap border class counts as pet, so the model learned to paint the border band too.
+- The man in the third photo is ignored. The model learned "pet", not "whatever is in front".
+- In the fifth photo the dark animal behind the dog is mostly missed, and there is a small false blob at the top right.
+
 ## What I learned
 
 - The encoder matters more than anything I did to the loss or the decoder. On small data, start pretrained.
 - Pixel accuracy (0.96) looks great and says little. IoU is where the real gaps show.
 - Always re-check accuracy after a speed trick. Here fp16 was free; that is not guaranteed.
 - TTA and threshold tuning are cheap to try. The threshold sweep must use validation data, never test.
+- A trained model is architecture plus weights, and the preprocessing belongs to the weights. When I load weights I did not train, I check them on a few labelled images before trusting them.
+- Save the weights at the end of a Colab run (`model.save_pretrained(...)`). RAM is gone when the runtime stops.
+- Prefer `.safetensors` over `.pth` for downloaded weights. A `.pth` is a pickle and can run code when loaded.
 
 ## Next
 
