@@ -14,6 +14,7 @@ Start with the table below and click through to any project.
 | 4 | CLIP from scratch | [`clip.py`](scripts/clip.py) | 100% zero-shot on the batch it memorized, 34% on unseen images | [docs/04](docs/04-clip.md) |
 | 5 | Multimodal LLM | [`multimodal_llm.py`](scripts/multimodal_llm.py) | Flickr8k captioner with only a 1.5M projector trained: val loss 2.68 (ppl 14.5) | [docs/05](docs/05-multimodal-llm.md) |
 | 6 | U-Net segmentation | [`unet_segmentation.ipynb`](notebooks/unet_segmentation.ipynb) | Pets vs background, pretrained ResNet-34 encoder: val IoU 0.911 (0.915 with flip TTA), plus inference on any photo with downloaded weights | [docs/06](docs/06-unet-segmentation.md) |
+| 7 | Variational autoencoder | [`variational_encoders.ipynb`](notebooks/variational_encoders.ipynb) | MNIST VAE with a 2D latent: test loss 154.2 per image after 10 epochs (45 s on `mps`), rebuilds digits and generates new ones from N(0, 1) | [docs/07](docs/07-variational-autoencoder.md) |
 
 ## A quick look
 
@@ -22,6 +23,8 @@ Start with the table below and click through to any project.
 | [![ViT](outputs/vit_training.png)](docs/01-vision-transformer.md) | [![CLIP](outputs/clip_similarity.png)](docs/04-clip.md) |
 | **Multimodal LLM captions** | **U-Net masks and errors** |
 | [![MLLM](outputs/mllm_samples.png)](docs/05-multimodal-llm.md) | [![U-Net](outputs/unet_predictions.png)](docs/06-unet-segmentation.md) |
+| **VAE latent space** | |
+| [![VAE](outputs/vae_latent_space.png)](docs/07-variational-autoencoder.md) | |
 
 ## Setup
 
@@ -47,7 +50,7 @@ Scripts pick CUDA, then Apple MPS, then CPU. The heavier projects (multimodal LL
 
 ```
 scripts/     vit.py  cnn.py  clip.py  multimodal_llm.py
-notebooks/   resnet.ipynb  multimodal_llm_colab.ipynb  unet_segmentation.ipynb
+notebooks/   resnet.ipynb  multimodal_llm_colab.ipynb  unet_segmentation.ipynb  variational_encoders.ipynb
 docs/        one page per project, plus TEMPLATE.md for new ones
 outputs/     plots (committed) and checkpoints (git-ignored)
 data/        datasets (git-ignored)
@@ -63,6 +66,7 @@ models/      downloaded pretrained weights (git-ignored)
 ## Papers behind these projects
 
 - He et al., [Deep Residual Learning](https://arxiv.org/abs/1512.03385), 2015
+- Kingma and Welling, [Auto-Encoding Variational Bayes](https://arxiv.org/abs/1312.6114), 2013
 - Ronneberger et al., [U-Net](https://arxiv.org/abs/1505.04597), 2015
 - Dosovitskiy et al., [An Image is Worth 16x16 Words](https://arxiv.org/abs/2010.11929), 2020
 - Radford et al., [CLIP](https://arxiv.org/abs/2103.00020), 2021
