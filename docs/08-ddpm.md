@@ -2,7 +2,7 @@
 
 # 8. Diffusion model (DDPM)
 
-A small diffusion model on MNIST, built from scratch. I teach a U-Net to remove noise from images. Then I start from pure static, remove the noise one small step at a time, and a new digit appears.
+A small diffusion model on MNIST, built from scratch. I teach a U-Net to remove noise from images. Then I start from pure static, remove the noise one small step at a time, and a new digit appears. At the end I add DDIM, which uses the same model but needs only 20 to 50 steps.
 
 | | |
 | --- | --- |
@@ -13,6 +13,7 @@ A small diffusion model on MNIST, built from scratch. I teach a U-Net to remove 
 | Noise steps | T = 1000, linear schedule from 1e-4 to 0.02 (paper values) |
 | Hardware | Apple Silicon GPU (`mps`), 5 epochs, about 33 min |
 | Result | Noise-prediction MSE: 0.0258 train, 0.0276 test |
+| Sampling speed | 16 digits: DDPM 1000 steps 16.4 s, DDIM 50 steps 0.9 s, same model |
 
 ## The question
 
@@ -110,6 +111,8 @@ uv run --with jupyter jupyter lab notebooks/ddpm.ipynb
 
 Run the cells top to bottom. MNIST downloads to `data/`. Weights save to `outputs/ddpm_mnist.pt` (git-ignored). On my Mac (`mps`) training took about 33 minutes.
 
+Already trained? Run sections 1 to 5 and 7, then section 11 (DDIM). It loads the saved weights.
+
 ## Results
 
 ### Training loss
@@ -156,6 +159,38 @@ Same reverse loop, with a snapshot every 100 steps.
 
 From t = 999 down to about t = 400, it's all static. Somewhere around t = 300 a rough shape shows up. By t = 200 you can tell it's a 0 or a 4. The last 200 steps only clean up the edges. So the big decisions (which digit, where) happen in the middle, and the end is polish.
 
+## DDIM: same model, fewer steps
+
+DDPM walks down all 1000 steps. DDIM jumps, for example 50 steps of 20 levels each, using the same trained U-Net. No retraining.
+
+One DDIM step, from level `t` down to level `s`:
+
+```python
+eps = model(x, t)                                  # 1. predict the noise
+x0  = (x - (1 - a_t).sqrt() * eps) / a_t.sqrt()    # 2. guess the clean image
+x   = a_s.sqrt() * x0 + (1 - a_s).sqrt() * eps     # 3. noise that guess back to level s
+```
+
+**Why can it skip?** Training only taught the model "how much noise is in this image at level `t`". It never learned how step `t` connects to step `t-1`. So we can ask it at any levels we want.
+
+**Why is it faster?** Each step is one U-Net call. 50 steps instead of 1000 is 20 times fewer calls.
+
+**Deterministic.** DDIM adds no new random noise, so the same starting noise always gives the same digit.
+
+![DDPM vs DDIM](../outputs/ddim_vs_ddpm.png)
+
+All three panels start from the same 16 noises.
+
+- **DDPM vs DDIM 1000:** different digits. DDPM adds new random noise at every step, so it ends up somewhere else.
+- **DDIM 1000 vs DDIM 50:** the same digits. Skipping steps barely changes the result.
+- **Speed:** DDPM and DDIM at 1000 steps both take about 17 s. With 50 steps DDIM takes 0.9 s. The speed comes from fewer steps, not from a faster step.
+
+(The 3 s printed back in section 10 was wrong. The clock stopped before the GPU had finished. The DDIM cells wait for it with `torch.mps.synchronize()`.)
+
+![DDIM steps](../outputs/ddim_steps.png)
+
+The same 8 noises, decoded with more and more steps. At 5 steps the digits are rough. From 20 steps on they barely change, so 20 steps (50x fewer calls) is enough here.
+
 ## What I learned
 
 - The training loop is tiny: random step, add noise, predict noise, MSE. All the cleverness is in the math that lets you jump to any step in one line.
@@ -163,14 +198,16 @@ From t = 999 down to about t = 400, it's all static. Somewhere around t = 300 a 
 - The network must know `t`. Adding a time embedding into every ResBlock is a simple way to do it.
 - Sharp samples, unlike the VAE. The price is speed: one image needs 1000 network calls instead of one.
 - The digit's shape is decided in the middle of the reverse chain (around t = 300 to 200). The early steps barely change anything you can see.
-- One-step denoising from t = 500 already gets the rough digit. That gave me a feel for why faster samplers like DDIM can skip steps.
+- One-step denoising from t = 500 already gets the rough digit. That is exactly what DDIM builds on.
+- DDIM skips steps because training only used the one-shot jump to `x_t`. Guess the clean image, add back less noise, repeat.
+- Time GPU code with a sync. My first DDPM timing said 3 s. The real number was over 70 s.
 
 ## Next
 
 1. Train longer (20+ epochs) for cleaner digits.
 2. Add self-attention in the bottleneck.
 3. Swap the linear schedule for a cosine schedule (Nichol and Dhariwal, 2021).
-4. Use DDIM sampling to cut 1000 steps down to about 50.
+4. Try other fast samplers (DPM-Solver) and compare at 10 steps.
 5. Class-conditional generation: ask for "a 7" on demand, then try classifier-free guidance.
 
 ## References
@@ -178,5 +215,6 @@ From t = 999 down to about t = 400, it's all static. Somewhere around t = 300 a 
 - Ho et al., [Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2006.11239), 2020
 - Nichol and Dhariwal, [Improved Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2102.09672), 2021
 - Song et al., [Denoising Diffusion Implicit Models (DDIM)](https://arxiv.org/abs/2010.02502), 2020
+- Lu et al., [DPM-Solver](https://arxiv.org/abs/2206.00927), 2022
 - Weng, [What are Diffusion Models?](https://lilianweng.github.io/posts/2021-07-11-diffusion-models/), 2021
 - Rombach et al., [High-Resolution Image Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752), 2022

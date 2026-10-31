@@ -15,7 +15,7 @@ Start with the table below and click through to any project.
 | 5 | Multimodal LLM | [`multimodal_llm.py`](scripts/multimodal_llm.py) | Flickr8k captioner with only a 1.5M projector trained: val loss 2.68 (ppl 14.5) | [docs/05](docs/05-multimodal-llm.md) |
 | 6 | U-Net segmentation | [`unet_segmentation.ipynb`](notebooks/unet_segmentation.ipynb) | Pets vs background, pretrained ResNet-34 encoder: val IoU 0.911 (0.915 with flip TTA), plus inference on any photo with downloaded weights | [docs/06](docs/06-unet-segmentation.md) |
 | 7 | Variational autoencoder | [`variational_encoders.ipynb`](notebooks/variational_encoders.ipynb) | MNIST VAE with a 2D latent: test loss 154.2 per image after 10 epochs (45 s on `mps`), rebuilds digits and generates new ones from N(0, 1) | [docs/07](docs/07-variational-autoencoder.md) |
-| 8 | Diffusion model (DDPM) | [`ddpm.ipynb`](notebooks/ddpm.ipynb) | MNIST DDPM with a 2.94M U-Net: test noise MSE 0.0276 after 5 epochs, sharp new digits from pure noise in 1000 steps | [docs/08](docs/08-ddpm.md) |
+| 8 | Diffusion model (DDPM + DDIM) | [`ddpm.ipynb`](notebooks/ddpm.ipynb) | MNIST DDPM with a 2.94M U-Net: test noise MSE 0.0276 after 5 epochs, sharp new digits from pure noise. DDIM on the same model: 50 steps, about 20x faster | [docs/08](docs/08-ddpm.md) |
 
 ## A quick look
 
@@ -70,6 +70,7 @@ models/      downloaded pretrained weights (git-ignored)
 - Kingma and Welling, [Auto-Encoding Variational Bayes](https://arxiv.org/abs/1312.6114), 2013
 - Ronneberger et al., [U-Net](https://arxiv.org/abs/1505.04597), 2015
 - Ho et al., [Denoising Diffusion Probabilistic Models](https://arxiv.org/abs/2006.11239), 2020
+- Song et al., [Denoising Diffusion Implicit Models](https://arxiv.org/abs/2010.02502), 2020
 - Dosovitskiy et al., [An Image is Worth 16x16 Words](https://arxiv.org/abs/2010.11929), 2020
 - Radford et al., [CLIP](https://arxiv.org/abs/2103.00020), 2021
 - Liu et al., [Visual Instruction Tuning (LLaVA)](https://arxiv.org/abs/2304.08485), 2023
